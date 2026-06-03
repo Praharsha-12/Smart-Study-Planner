@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StudySync Web</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f7fb; margin:0; padding:20px; }
+    .container { max-width: 980px; margin: auto; }
+    h1 { margin-top:0; }
+    .panel { background:white; border-radius:10px; padding:20px; margin-bottom:20px; box-shadow:0 4px 16px rgba(0,0,0,0.08); }
+    label { display:block; margin-top:12px; font-weight:600; }
+    input, select { width:100%; padding:10px 12px; margin-top:6px; border:1px solid #cbd5e1; border-radius:8px; }
+    button { cursor:pointer; border:none; border-radius:8px; padding:10px 16px; background:#2563eb; color:white; font-weight:700; }
+    button:disabled { opacity:0.55; cursor:not-allowed; }
+    table { width:100%; border-collapse:collapse; margin-top:20px; }
+    th, td { text-align:left; padding:12px; border-bottom:1px solid #e2e8f0; }
+    th { background:#eef2ff; }
+    .status-pending { color:#1d4ed8; font-weight:700; }
+    .status-completed { color:#047857; font-weight:700; }
+    .task-row.selected { background:#f8fafc; }
+    .timer-box { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-top:12px; }
+    .timer-card { padding:18px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; flex:1; min-width:220px; }
+    .timer-card span { display:block; font-size:28px; font-weight:800; margin-top:6px; }
+    .note { color:#475569; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="panel">
+      <h1>StudySync Web</h1>
+      <form action="/add" method="POST">
+        <label>Subject</label>
+        <input type="text" name="subject" placeholder="Math, English, History" required />
+        <label>Task</label>
+        <input type="text" name="task" placeholder="Read chapter, practice problems" required />
+        <label>Deadline</label>
+        <input type="date" name="deadline" />
+        <label>Priority</label>
+        <select name="priority">
+          <option>High</option>
+          <option selected>Medium</option>
+          <option>Low</option>
+        </select>
+        <label>Duration (minutes)</label>
+        <input type="number" name="duration" min="1" value="25" required />
+        <button type="submit" style="margin-top:20px;">Add Task</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Tasks</h2>
+      <table>
+        <thead>
+          <tr><th>Subject</th><th>Task</th><th>Duration</th><th>Priority</th><th>Status</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+          {% for task in tasks %}
+          <tr data-task-id="{{ task[0] }}" data-duration="{{ task[5] }}" data-task-desc="{{ task[2] }}" class="task-row">
+            <td>{{ task[1] }}</td>
+            <td>{{ task[2] }}</td>
+            <td>{{ task[5] }} min</td>
+            <td>{{ task[4] }}</td>
+            <td class="status-{{ task[6]|lower }}">{{ task[6] }}</td>
+            <td>
+              <button type="button" class="start-button" {% if task[6] == 'Completed' %}disabled{% endif %}>Start</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="note">Select a task and click Start. The task will be marked completed automatically when the timer ends.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Current Timer</h2>
+      <div class="timer-box">
+        <div class="timer-card">
+          <div>Selected Task</div>
+          <span id="active-task">No task selected</span>
+        </div>
+        <div class="timer-card">
+          <div>Time remaining</div>
+          <span id="timer-display">00:00</span>
+        </div>
+        <div class="timer-card">
+          <div>Timer control</div>
+          <button id="stop-button" disabled>Stop Timer</button>
+          <button id="keepalive-button" type="button" style="margin-top:12px; background:#10b981;">Keep running 24/7</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const startButtons = document.querySelectorAll('.start-button');
+    const keepAliveButton = document.getElementById('keepalive-button');
+    const activeTaskKey = 'studysyncActiveTimer';
+    const activeTaskLabel = document.getElementById('active-task');
+    const timerDisplay = document.getElementById('timer-display');
+    const stopButton = document.getElementById('stop-button');
+
+    let timer = null;
+    let remainingSeconds = 0;
+    let activeTaskId = null;
+
+    function formatTime(seconds) {
+      const minutes = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+
+    function clearTimerState() {
+      localStorage.removeItem(activeTaskKey);
+    }
+
+    function clearCurrentTimer() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      activeTaskId = null;
+      activeTaskLabel.textContent = 'No task selected';
+      timerDisplay.textContent = '00:00';
+      stopButton.disabled = true;
+      document.querySelectorAll('.task-row').forEach(row => row.classList.remove('selected'));
+      clearTimerState();
+    }
+
+    function saveTimerState() {
+      if (!activeTaskId) return;
+      localStorage.setItem(activeTaskKey, JSON.stringify({
+        activeTaskId,
+        taskDesc: activeTaskLabel.textContent,
+        remainingSeconds
+      }));
+    }
+
+    function restoreTimerState() {
+      const saved = localStorage.getItem(activeTaskKey);
+      if (!saved) return;
+
+      try {
+        const state = JSON.parse(saved);
+        if (state.activeTaskId && state.taskDesc && state.remainingSeconds > 0) {
+          startTimer(state.activeTaskId, state.taskDesc, state.remainingSeconds, true);
+        } else {
+          clearTimerState();
+        }
+      } catch (err) {
+        clearTimerState();
+      }
+    }
+
+    function completeTask(id) {
+      fetch(`/complete/${id}`, { method: 'POST' })
+        .then(response => response.json())
+        .then(result => {
+          if (result.success) {
+            clearTimerState();
+            location.reload();
+          }
+        });
+    }
+
+    function startTimer(taskId, taskDesc, duration, fromSaved = false) {
+      if (timer) {
+        clearCurrentTimer();
+      }
+      activeTaskId = taskId;
+      remainingSeconds = fromSaved ? duration : duration * 60;
+      activeTaskLabel.textContent = `${taskDesc} (${Math.ceil(remainingSeconds / 60)} min)`;
+      timerDisplay.textContent = formatTime(remainingSeconds);
+      stopButton.disabled = false;
+      saveTimerState();
+
+      timer = setInterval(() => {
+        remainingSeconds -= 1;
+        timerDisplay.textContent = formatTime(remainingSeconds);
+        saveTimerState();
+        if (remainingSeconds <= 0) {
+          clearCurrentTimer();
+          completeTask(taskId);
+        }
+      }, 1000);
+    }
+
+    startButtons.forEach(button => {
+      button.addEventListener('click', () => {
+        const row = button.closest('tr');
+        const taskId = row.dataset.taskId;
+        const duration = Number(row.dataset.duration);
+        const taskDesc = row.dataset.taskDesc;
+        row.classList.add('selected');
+        startTimer(taskId, taskDesc, duration);
+      });
+    });
+
+    stopButton.addEventListener('click', () => {
+      clearCurrentTimer();
+    });
+
+    keepAliveButton.addEventListener('click', () => {
+      if (!activeTaskId) {
+        alert('Select a task and click Start first, then use this button to keep the timer alive across reloads.');
+        return;
+      }
+      alert('The timer will now stay saved in your browser and restore automatically after refresh. Keep this tab open to continue the countdown.');
+      saveTimerState();
+    });
+
+    restoreTimerState();
+  </script>
+</body>
+</html>
